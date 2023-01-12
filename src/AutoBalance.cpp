@@ -535,7 +535,7 @@ class AutoBalance_AllMapScript : public AllMapScript
             if (PlayerChangeNotify) {
                 for (MapReference const& ref : map->GetPlayers()) {
                     if (Player const* playerHandle = ref.GetSource()) {
-                        ChatHandler(playerHandle->GetSession()).PSendSysMessage("|cffFF0000 [AutoBalance+NPCBots]|r|cffFF8000 %s's bots entered %s. Auto setting player count to %i (Player Difficulty Offset = %i) |r", player->GetName().c_str(), map->GetMapName(), mapABInfo->playerCount + PlayerCountDifficultyOffset, PlayerCountDifficultyOffset);
+                        ChatHandler(playerHandle->GetSession()).PSendSysMessage("|cffFF0000 [AutoBalance+NPCBots]|r|cffFF8000 %s 的NPCBots进入了 %s。自动将玩家数量设置为 %i（玩家难度偏移 = %i） |r", player->GetName().c_str(), map->GetMapName(), mapABInfo->playerCount + PlayerCountDifficultyOffset, PlayerCountDifficultyOffset);
                     }
                 }
             }
@@ -596,7 +596,7 @@ class AutoBalance_AllMapScript : public AllMapScript
                             if (Player* playerHandle = playerIteration->GetSource())
                             {
                                 ChatHandler chatHandle = ChatHandler(playerHandle->GetSession());
-                                chatHandle.PSendSysMessage("|cffFF0000 [AutoBalance]|r|cffFF8000 %s entered %s. Auto setting player count to %i (Player Difficulty Offset = %i) |r", player->GetName().c_str(), map->GetMapName(), mapABInfo->playerCount + PlayerCountDifficultyOffset, PlayerCountDifficultyOffset);
+                                chatHandle.PSendSysMessage("|cffFF0000 [AutoBalance]|r|cffFF8000 %s 进入了 %s。自动将玩家数量设置为 %i（玩家难度偏移 = %i） |r", player->GetName().c_str(), map->GetMapName(), mapABInfo->playerCount + PlayerCountDifficultyOffset, PlayerCountDifficultyOffset);
                             }
                         }
                     }
@@ -639,8 +639,8 @@ class AutoBalance_AllMapScript : public AllMapScript
                     {
                         if (Player* plr = itr->GetSource())
                         {
-                            plr->GetSession()->SendNotification("|cff4cff00%s|rAccess can be unlocked during non-combat", map->GetMapName());
-                            plr->GetSession()->SendNotification("|cffffffff[%s]|rThe player left during the battle|cff4cff00%s|rInstance elastic lock", player->GetName().c_str(), map->GetMapName());
+                            plr->GetSession()->SendNotification("|cff4cff00%s|r等到战斗结束才能进入", map->GetMapName());
+                            plr->GetSession()->SendNotification("|cffffffff[%s]|r玩家在|cff4cff00%s|r副本战斗中离开，实施弹性锁", player->GetName().c_str(), map->GetMapName());
                         }
                     }
                 }
@@ -670,7 +670,7 @@ class AutoBalance_AllMapScript : public AllMapScript
                             if (Player* playerHandle = playerIteration->GetSource())
                             {
                                 ChatHandler chatHandle = ChatHandler(playerHandle->GetSession());
-                                chatHandle.PSendSysMessage("|cffFF0000 [-AutoBalance]|r|cffFF8000 %s left %s. Auto setting player count to %i (Player Difficulty Offset = %i) |r", player->GetName().c_str(), map->GetMapName(), mapABInfo->playerCount + PlayerCountDifficultyOffset, PlayerCountDifficultyOffset);
+                                chatHandle.PSendSysMessage("|cffFF0000 [-AutoBalance]|r|cffFF8000 %s 离开了 %s。自动将玩家数量设置为 %i（玩家难度偏移 = %i） |r", player->GetName().c_str(), map->GetMapName(), mapABInfo->playerCount + PlayerCountDifficultyOffset, PlayerCountDifficultyOffset);
                             }
                         }
                     }
@@ -1057,7 +1057,7 @@ public:
         if (!*args)
         {
             handler->PSendSysMessage(".autobalance setoffset #");
-            handler->PSendSysMessage("Sets the Player Difficulty Offset for instances. Example: (You + offset(1) = 2 player difficulty).");
+            handler->PSendSysMessage("为副本设置玩家难度偏移。示例：（你(1) + offset(1) = 2 玩家难度）。");
             return false;
         }
         char* offset = strtok((char*)args, " ");
@@ -1066,18 +1066,18 @@ public:
         if (offset)
         {
             offseti = (int32)atoi(offset);
-            handler->PSendSysMessage("Changing Player Difficulty Offset to %i.", offseti);
+            handler->PSendSysMessage("将玩家难度偏移更改为 %i。", offseti);
             PlayerCountDifficultyOffset = offseti;
             return true;
         }
         else
-            handler->PSendSysMessage("Error changing Player Difficulty Offset! Please try again.");
+            handler->PSendSysMessage("更改玩家难度偏移时出错！请再试一遍。");
         return false;
     }
 
     static bool HandleABGetOffsetCommand(ChatHandler* handler, const char* /*args*/)
     {
-        handler->PSendSysMessage("Current Player Difficulty Offset = %i", PlayerCountDifficultyOffset);
+        handler->PSendSysMessage("当前玩家难度偏移 = %i", PlayerCountDifficultyOffset);
         return true;
     }
 
@@ -1128,8 +1128,8 @@ public:
 
         AutoBalanceMapInfo *mapABInfo=pl->GetMap()->CustomData.GetDefault<AutoBalanceMapInfo>("AutoBalanceMapInfo");
 
-        handler->PSendSysMessage("Players on map: %u", mapABInfo->playerCount);
-        handler->PSendSysMessage("Max level of players in this map: %u", mapABInfo->mapLevel);
+        handler->PSendSysMessage("地图中的玩家：%u", mapABInfo->playerCount);
+        handler->PSendSysMessage("此地图中玩家的最高等级：%u", mapABInfo->mapLevel);
 
         return true;
     }
@@ -1147,12 +1147,12 @@ public:
 
         AutoBalanceCreatureInfo *creatureABInfo=target->CustomData.GetDefault<AutoBalanceCreatureInfo>("AutoBalanceCreatureInfo");
 
-        handler->PSendSysMessage("Instance player Count: %u", creatureABInfo->instancePlayerCount);
-        handler->PSendSysMessage("Selected level: %u", creatureABInfo->selectedLevel);
-        handler->PSendSysMessage("Damage multiplier: %.6f", creatureABInfo->DamageMultiplier);
-        handler->PSendSysMessage("Health multiplier: %.6f", creatureABInfo->HealthMultiplier);
-        handler->PSendSysMessage("Mana multiplier: %.6f", creatureABInfo->ManaMultiplier);
-        handler->PSendSysMessage("Armor multiplier: %.6f", creatureABInfo->ArmorMultiplier);
+        handler->PSendSysMessage("副本玩家数：%u", creatureABInfo->instancePlayerCount);
+        handler->PSendSysMessage("所选等级：%u", creatureABInfo->selectedLevel);
+        handler->PSendSysMessage("伤害倍率: %.6f", creatureABInfo->DamageMultiplier);
+        handler->PSendSysMessage("生命值倍率: %.6f", creatureABInfo->HealthMultiplier);
+        handler->PSendSysMessage("法力值倍率: %.6f", creatureABInfo->ManaMultiplier);
+        handler->PSendSysMessage("护甲倍率: %.6f", creatureABInfo->ArmorMultiplier);
 
         return true;
 
