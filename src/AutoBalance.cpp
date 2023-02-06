@@ -131,14 +131,6 @@ public:
     float ArmorMultiplier = 1;
 };
 
-class AutoBalancePlayerInfo : public DataMap::Base
-{
-public:
-    AutoBalancePlayerInfo() {}
-    AutoBalancePlayerInfo(bool enabled) : enabled(enabled) {}
-    bool enabled = true;
-};
-
 class AutoBalanceMapInfo : public DataMap::Base
 {
 public:
@@ -157,42 +149,9 @@ static std::map<uint32, float> bossOverrides;
 // Another value TODO in player class for the party leader's value to determine dungeon difficulty.
 static int8 PlayerCountDifficultyOffset, LevelScaling, higherOffset, lowerOffset;
 static uint32 rewardRaid, rewardDungeon, MinPlayerReward;
-static bool enabled, LevelEndGameBoost, DungeonsOnly, PlayerChangeNotify, LevelUseDb, rewardEnabled, DungeonScaleDownXP, DungeonScaleDownMoney, CountNpcBots, PlayerScaling, allowPerGroupEnable;
+static bool enabled, LevelEndGameBoost, DungeonsOnly, PlayerChangeNotify, LevelUseDb, rewardEnabled, DungeonScaleDownXP, DungeonScaleDownMoney, CountNpcBots, PlayerScaling;
 static float globalRate, healthMultiplier, manaMultiplier, armorMultiplier, damageMultiplier, MinHPModifier, MinManaModifier, MinDamageModifier,
 InflectionPoint, InflectionPointRaid, InflectionPointRaid10M, InflectionPointRaid25M, InflectionPointHeroic, InflectionPointRaidHeroic, InflectionPointRaid10MHeroic, InflectionPointRaid25MHeroic, BossInflectionMult;
-
-
-static Player *GetGroupLeaderOrSelf(Player *player)
-{
-    Group *group = player->GetGroup();
-    Player *groupLeader = player;
-
-    // If player is in a group, get the group leader
-    if (group)
-    {
-        auto leaderGUID = group->GetLeaderGUID();
-
-        Player* leader = ObjectAccessor::FindPlayer(group->GetLeaderGUID());
-        if (leader)
-            groupLeader = leader;
-    }
-    // Now, groupLeader is either the player if he is not grouped or the real group leader
-    return groupLeader;
-}
-static bool IsEnabledForGroup(Player *player)
-{
-    // If config do not allow group to change config, return global enabled value
-    if (!allowPerGroupEnable)
-        return enabled;
-
-    // Get the group leader. It is the one that decide if the autobalance should be enabled
-    Player *groupLeader = GetGroupLeaderOrSelf(player);
-
-    // Get our custom data
-    AutoBalancePlayerInfo *playerABInfo = groupLeader->CustomData.GetDefault<AutoBalancePlayerInfo>("AutoBalancePlayerInfo");
-    // Now, groupLeader is either the player if he is not grouped or the real group leader
-    return playerABInfo->enabled;
-}
 
 int GetValidDebugLevel()
 {
@@ -390,7 +349,6 @@ class AutoBalance_WorldScript : public WorldScript
         //alvin mod
         PlayerScaling = sConfigMgr->GetOption<bool>("AutoBalance.PlayerScaling", true);
         //end alvin mod
-        allowPerGroupEnable = sConfigMgr->GetBoolDefault("AutoBalance.AllowPerGroupEnable", 1);
 
         LevelScaling = sConfigMgr->GetOption<uint32>("AutoBalance.levelScaling", 1);
         PlayerCountDifficultyOffset = sConfigMgr->GetOption<int32>("AutoBalance.playerCountDifficultyOffset", 0);
@@ -437,9 +395,6 @@ class AutoBalance_PlayerScript : public PlayerScript
         virtual void OnLevelChanged(Player* player, uint8 /*oldlevel*/) override
         {
             if (!enabled || !player)
-                return;
-
-            if (!IsEnabledForGroup(player))
                 return;
 
             if (LevelScaling == 0)
@@ -630,10 +585,6 @@ class AutoBalance_AllMapScript : public AllMapScript
             if (DungeonsOnly && !map->IsDungeon())
                 return;
 
-            // Check the group enable flag only for instances
-            if (map->IsDungeon() && !IsEnabledForGroup(player))
-                return;
-
             AutoBalanceMapInfo *mapABInfo=map->CustomData.GetDefault<AutoBalanceMapInfo>("AutoBalanceMapInfo");
 
             // always check level, even if not conf enabled
@@ -694,9 +645,6 @@ class AutoBalance_AllMapScript : public AllMapScript
                 return;
 
             if (DungeonsOnly && !map->IsDungeon())
-                return;
-
-            if (map->IsDungeon() && !IsEnabledForGroup(player))
                 return;
 
             AutoBalanceMapInfo *mapABInfo=map->CustomData.GetDefault<AutoBalanceMapInfo>("AutoBalanceMapInfo");
@@ -1132,70 +1080,12 @@ public:
             { "mapstat",          SEC_GAMEMASTER,                        true, &HandleABMapStatsCommand,                  "Shows current autobalance information for this map-" },
             { "creaturestat",     SEC_GAMEMASTER,                        true, &HandleABCreatureStatsCommand,             "Shows current autobalance information for selected creature." },
         };
-        if (allowPerGroupEnable)
-        {
-            ABCommandTable.push_back(ChatCommand("on",    SEC_PLAYER, false, &HandleABEnableCommand,  "Enable autobalance for your group."));
-            ABCommandTable.push_back(ChatCommand("off",   SEC_PLAYER, false, &HandleABDisableCommand, "Disable autobalance for your group."));
-            ABCommandTable.push_back(ChatCommand("state", SEC_PLAYER, false, &HandleABStateCommand,   "Show current autobalance state for your group."));
-        }
 
         static std::vector<ChatCommand> commandTable =
         {
-            { "autobalance",     SEC_PLAYER,                             true, nullptr,                      "", ABCommandTable },
+            { "autobalance",     SEC_GAMEMASTER,                            false, NULL,                      "", ABCommandTable },
         };
         return commandTable;
-    }
-
-    static bool HandleABStateCommand(ChatHandler* handler, const char* args)
-    {
-        Player *player = handler->GetSession()->GetPlayer();
-        if (!player)
-            return false;
-        Player *groupLeader = GetGroupLeaderOrSelf(player);
-        // Should never happen, because when not in group, GetGroupOrSelf returns player
-        if (!groupLeader)
-            return false;
-        AutoBalancePlayerInfo *playerABInfo = groupLeader->CustomData.GetDefault<AutoBalancePlayerInfo>("AutoBalancePlayerInfo");
-        // TODO: should use database to store localized strings
-        if (player->GetSession()->GetSessionDbcLocale() == LOCALE_zhCN)
-            handler->PSendSysMessage("Autobalance %s.", playerABInfo->enabled ? "已启用" : "已禁用");
-        else
-            handler->PSendSysMessage("Autobalance is %s.", playerABInfo->enabled ? "enabled" : "disabled");
-        return true;
-    }
-
-    static bool SetGroupAutobalance(ChatHandler *handler, bool enable)
-    {
-        Player *player = handler->GetSession()->GetPlayer();
-        if (!player)
-            return false;
-        Player *groupLeader = GetGroupLeaderOrSelf(player);
-        if (groupLeader != player)
-        {
-            // TODO: should use database to store localized strings
-            if (player->GetSession()->GetSessionDbcLocale() == LOCALE_zhCN)
-                handler->PSendSysMessage("您必须是队长才能修改autobalance。");
-            else
-                handler->PSendSysMessage("You must be group leader to modify autobalance.");
-            return true;
-        }
-        AutoBalancePlayerInfo *playerABInfo = player->CustomData.GetDefault<AutoBalancePlayerInfo>("AutoBalancePlayerInfo");
-        playerABInfo->enabled = enable;
-        if (player->GetSession()->GetSessionDbcLocale() == LOCALE_frFR)
-            handler->PSendSysMessage("Autobalance %s.", playerABInfo->enabled ? "已启用" : "已禁用");
-        else
-            handler->PSendSysMessage("Autobalance is now %s", playerABInfo->enabled ? "enabled" : "disabled");
-        return true;
-    }
-
-    static bool HandleABEnableCommand(ChatHandler* handler, const char* args)
-    {
-        return SetGroupAutobalance(handler, true);
-    }
-
-    static bool HandleABDisableCommand(ChatHandler* handler, const char* args)
-    {
-        return SetGroupAutobalance(handler, false);
     }
 
     static bool HandleABSetOffsetCommand(ChatHandler* handler, const char* args)
