@@ -135,11 +135,11 @@ AutoBalance.DungeonsOnly=1
 AutoBalance.CountNpcBots=1
 
 #
-#     AutoBalance.PlayerScaling
-#        Scaling player, NPCBots and pets instead of scaling a creature of raid.
+#     AutoBalance.DamageScalingOnly
+#        Disable HP, mana and armor scaling. scale damage of player, NPCBots , pets and creature.
 #        Default:     1 (1 = ON, 0 = OFF)
 
-AutoBalance.PlayerScaling=1
+AutoBalance.DamageScalingOnly=1
 
 #
 #     AutoBalance.DebugLevel

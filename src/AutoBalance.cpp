@@ -149,7 +149,7 @@ static std::map<uint32, float> bossOverrides;
 // Another value TODO in player class for the party leader's value to determine dungeon difficulty.
 static int8 PlayerCountDifficultyOffset, LevelScaling, higherOffset, lowerOffset;
 static uint32 rewardRaid, rewardDungeon, MinPlayerReward;
-static bool enabled, LevelEndGameBoost, DungeonsOnly, PlayerChangeNotify, LevelUseDb, rewardEnabled, DungeonScaleDownXP, DungeonScaleDownMoney, CountNpcBots, PlayerScaling;
+static bool enabled, LevelEndGameBoost, DungeonsOnly, PlayerChangeNotify, LevelUseDb, rewardEnabled, DungeonScaleDownXP, DungeonScaleDownMoney, CountNpcBots, DamageScalingOnly;
 static float globalRate, healthMultiplier, manaMultiplier, armorMultiplier, damageMultiplier, MinHPModifier, MinManaModifier, MinDamageModifier,
 InflectionPoint, InflectionPointRaid, InflectionPointRaid10M, InflectionPointRaid25M, InflectionPointHeroic, InflectionPointRaidHeroic, InflectionPointRaid10MHeroic, InflectionPointRaid25MHeroic, BossInflectionMult;
 
@@ -347,7 +347,7 @@ class AutoBalance_WorldScript : public WorldScript
         CountNpcBots = sConfigMgr->GetOption<bool>("AutoBalance.CountNpcBots", true);
         //end npcbot
         //alvin mod
-        PlayerScaling = sConfigMgr->GetOption<bool>("AutoBalance.PlayerScaling", true);
+        DamageScalingOnly = sConfigMgr->GetOption<bool>("AutoBalance.DamageScalingOnly", true);
         //end alvin mod
 
         LevelScaling = sConfigMgr->GetOption<uint32>("AutoBalance.levelScaling", 1);
@@ -453,14 +453,14 @@ class AutoBalance_UnitScript : public UnitScript
         return _Modifer_DealDamage(playerVictim, AttackerUnit, damage);
     }
 
-    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* /*spellInfo*/) override
+    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* spellInfo) override
     {
-        damage = _Modifer_DealDamage(target, attacker, damage);
+        damage = _Modifer_DealDamage(target, attacker, damage, spellInfo);
     }
 
-    void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* /*spellInfo*/) override
+    void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* spellInfo) override
     {
-        damage = _Modifer_DealDamage(target, attacker, damage);
+        damage = _Modifer_DealDamage(target, attacker, damage, spellInfo);
     }
 
     void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage) override
@@ -468,40 +468,49 @@ class AutoBalance_UnitScript : public UnitScript
         damage = _Modifer_DealDamage(target, attacker, damage);
     }
 
-    void ModifyHealReceived(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* /*spellInfo*/) override {
-        damage = _Modifer_DealDamage(target, attacker, damage);
+    void ModifyHealReceived(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* spellInfo) override {
+        damage = _Modifer_DealDamage(target, attacker, damage, spellInfo);
+    }
+
+    bool _isPlayerORPet(Unit* unit)
+    {
+        return unit->IsNPCBotOrPet() || unit->GetTypeId() == TYPEID_PLAYER || (unit->GetOwner() && unit->GetOwner()->GetTypeId() == TYPEID_PLAYER);
     }
 
 
-    uint32 _Modifer_DealDamage(Unit* target, Unit* attacker, uint32 damage)
+    uint32 _Modifer_DealDamage(Unit* target, Unit* attacker, uint32 damage, SpellInfo const* spellInfo = nullptr)
     {
-        if (PlayerScaling){
-            if (!enabled || !target || !attacker)
-                return damage;
-
-            bool isAttackerPet = attacker->GetOwner() && attacker->GetOwner()->GetTypeId() == TYPEID_PLAYER;
-
-            if (!(attacker->IsNPCBotOrPet() || attacker->GetTypeId() == TYPEID_PLAYER || isAttackerPet))
-                return damage;
-
-            bool isTargetPet = attacker->GetOwner() && attacker->GetOwner()->GetTypeId() == TYPEID_PLAYER;
-
-            if (target->IsNPCBotOrPet() || target->GetTypeId() == TYPEID_PLAYER || isTargetPet)
+//        if (spellInfo && spellInfo->Id == 40265) {
+//            damage = damage * 0.1;
+//        }
+        if (DamageScalingOnly){
+            if (!enabled || !attacker || !attacker->IsInWorld())
                 return damage;
 
             if (!(!DungeonsOnly || (target->GetMap()->IsDungeon() && attacker->GetMap()->IsDungeon())
                 || (attacker->GetMap()->IsBattleground() && target->GetMap()->IsBattleground())))
                 return damage;
 
-            float multiplier = target->CustomData.GetDefault<AutoBalanceCreatureInfo>("AutoBalanceCreatureInfo")->DamageMultiplier;
+            float attackerMultiplier = attacker->CustomData.GetDefault<AutoBalanceCreatureInfo>("AutoBalanceCreatureInfo")->DamageMultiplier;
+            float targetMultiplier = target->CustomData.GetDefault<AutoBalanceCreatureInfo>("AutoBalanceCreatureInfo")->DamageMultiplier;
 
-            if (multiplier < 0.01)
-                multiplier = 1.0;
+            if (attackerMultiplier < 0.01)
+                attackerMultiplier = 0.01;
 
-            if (fabs(multiplier - 1.0) < 0.01)
+            if (targetMultiplier < 0.01)
+                targetMultiplier = 0.01;
+
+            if ((fabs(attackerMultiplier - 1.0) < 0.01) && fabs(targetMultiplier - 1.0) < 0.01)
                 return damage;
 
-            return damage / multiplier;
+            if (_isPlayerORPet(attacker))
+            {
+                return _isPlayerORPet(target) ? damage : damage / targetMultiplier;
+            }
+            else
+            {
+                return _isPlayerORPet(target) ? damage * attackerMultiplier : damage;
+            }
         }
 
         if (!enabled)
@@ -510,9 +519,9 @@ class AutoBalance_UnitScript : public UnitScript
         if (!attacker || attacker->GetTypeId() == TYPEID_PLAYER || !attacker->IsInWorld())
             return damage;
 
-        float damageMultiplier = attacker->CustomData.GetDefault<AutoBalanceCreatureInfo>("AutoBalanceCreatureInfo")->DamageMultiplier;
+        float attackerMultiplier = attacker->CustomData.GetDefault<AutoBalanceCreatureInfo>("AutoBalanceCreatureInfo")->DamageMultiplier;
 
-        if (damageMultiplier == 1)
+        if (attackerMultiplier == 1)
             return damage;
 
         if (!(!DungeonsOnly
@@ -524,7 +533,7 @@ class AutoBalance_UnitScript : public UnitScript
         if (attacker->GetOwner() && attacker->GetOwner()->GetTypeId() == TYPEID_PLAYER)
             return damage;
 
-        return damage * damageMultiplier;
+        return damage * attackerMultiplier;
     }
 };
 
@@ -835,7 +844,7 @@ public:
             if (level != creatureABInfo->selectedLevel || creatureABInfo->selectedLevel != creature->getLevel()) {
                 // keep bosses +3 level
                 creatureABInfo->selectedLevel = level + bonusLevel;
-                if (!PlayerScaling)
+                if (!DamageScalingOnly)
                     creature->SetLevel(creatureABInfo->selectedLevel);
             }
         } else {
@@ -1025,7 +1034,7 @@ public:
 
         creatureABInfo->DamageMultiplier = damageMul;
 
-        if (!PlayerScaling){
+        if (!DamageScalingOnly){
             uint32 prevMaxHealth = creature->GetMaxHealth();
             uint32 prevMaxPower = creature->GetMaxPower(POWER_MANA);
             uint32 prevHealth = creature->GetHealth();
