@@ -149,7 +149,7 @@ static std::map<uint32, float> bossOverrides;
 // Another value TODO in player class for the party leader's value to determine dungeon difficulty.
 static int8 PlayerCountDifficultyOffset, LevelScaling, higherOffset, lowerOffset;
 static uint32 rewardRaid, rewardDungeon, MinPlayerReward;
-static bool enabled, LevelEndGameBoost, DungeonsOnly, PlayerChangeNotify, LevelUseDb, rewardEnabled, DungeonScaleDownXP, DungeonScaleDownMoney, CountNpcBots;
+static bool enabled, LevelEndGameBoost, DungeonsOnly, PlayerChangeNotify, LevelUseDb, rewardEnabled, DungeonScaleDownXP, DungeonScaleDownMoney, CountNpcBots, PlayerScaling;
 static float globalRate, healthMultiplier, manaMultiplier, armorMultiplier, damageMultiplier, MinHPModifier, MinManaModifier, MinDamageModifier,
 InflectionPoint, InflectionPointRaid, InflectionPointRaid10M, InflectionPointRaid25M, InflectionPointHeroic, InflectionPointRaidHeroic, InflectionPointRaid10MHeroic, InflectionPointRaid25MHeroic, BossInflectionMult;
 
@@ -346,6 +346,9 @@ class AutoBalance_WorldScript : public WorldScript
         //npcbot
         CountNpcBots = sConfigMgr->GetOption<bool>("AutoBalance.CountNpcBots", true);
         //end npcbot
+        //alvin mod
+        PlayerScaling = sConfigMgr->GetOption<bool>("AutoBalance.PlayerScaling", true);
+        //end alvin mod
 
         LevelScaling = sConfigMgr->GetOption<uint32>("AutoBalance.levelScaling", 1);
         PlayerCountDifficultyOffset = sConfigMgr->GetOption<int32>("AutoBalance.playerCountDifficultyOffset", 0);
@@ -472,6 +475,35 @@ class AutoBalance_UnitScript : public UnitScript
 
     uint32 _Modifer_DealDamage(Unit* target, Unit* attacker, uint32 damage)
     {
+        if (PlayerScaling){
+            if (!enabled || !target || !attacker)
+                return damage;
+
+            bool isAttackerPet = attacker->GetOwner() && attacker->GetOwner()->GetTypeId() == TYPEID_PLAYER;
+
+            if (!(attacker->IsNPCBotOrPet() || attacker->GetTypeId() == TYPEID_PLAYER || isAttackerPet))
+                return damage;
+
+            bool isTargetPet = attacker->GetOwner() && attacker->GetOwner()->GetTypeId() == TYPEID_PLAYER;
+
+            if (target->IsNPCBotOrPet() || target->GetTypeId() == TYPEID_PLAYER || isTargetPet)
+                return damage;
+
+            if (!(!DungeonsOnly || (target->GetMap()->IsDungeon() && attacker->GetMap()->IsDungeon())
+                || (attacker->GetMap()->IsBattleground() && target->GetMap()->IsBattleground())))
+                return damage;
+
+            float multiplier = target->CustomData.GetDefault<AutoBalanceCreatureInfo>("AutoBalanceCreatureInfo")->DamageMultiplier;
+
+            if (multiplier < 0.01)
+                multiplier = 1.0;
+
+            if (fabs(multiplier - 1.0) < 0.01)
+                return damage;
+
+            return damage / multiplier;
+        }
+
         if (!enabled)
             return damage;
 
@@ -489,7 +521,7 @@ class AutoBalance_UnitScript : public UnitScript
             return damage;
 
 
-        if ((attacker->IsHunterPet() || attacker->IsPet() || attacker->IsSummon()) && attacker->IsControlledByPlayer())
+        if (attacker->GetOwner() && attacker->GetOwner()->GetTypeId() == TYPEID_PLAYER)
             return damage;
 
         return damage * damageMultiplier;
@@ -716,7 +748,7 @@ public:
         if (!creature->GetMap()->IsDungeon() && !creature->GetMap()->IsBattleground() && DungeonsOnly)
             return;
 
-        if (((creature->IsHunterPet() || creature->IsPet() || creature->IsSummon()) && creature->IsControlledByPlayer()))
+        if (creature->GetOwner() && creature->GetOwner()->GetTypeId() == TYPEID_PLAYER)
         {
             return;
         }
@@ -803,7 +835,8 @@ public:
             if (level != creatureABInfo->selectedLevel || creatureABInfo->selectedLevel != creature->getLevel()) {
                 // keep bosses +3 level
                 creatureABInfo->selectedLevel = level + bonusLevel;
-                creature->SetLevel(creatureABInfo->selectedLevel);
+                if (!PlayerScaling)
+                    creature->SetLevel(creatureABInfo->selectedLevel);
             }
         } else {
             creatureABInfo->selectedLevel = creature->getLevel();
@@ -960,12 +993,6 @@ public:
 
         float damageMul = defaultMultiplier * globalRate * damageMultiplier;
 
-        // Can not be less then Min_D_Mod
-        if (damageMul <= MinDamageModifier)
-        {
-            damageMul = MinDamageModifier;
-        }
-
         if (!useDefStats && LevelScaling && !skipLevel) {
             float origDmgBase = origCreatureStats->GenerateBaseDamage(creatureTemplate);
             float newDmgBase = 0;
@@ -984,42 +1011,51 @@ public:
             damageMul *= newDmgBase/origDmgBase;
         }
 
+        // Can not be less then Min_D_Mod
+        if (damageMul <= MinDamageModifier)
+        {
+            damageMul = MinDamageModifier;
+        }
+
         creatureABInfo->ArmorMultiplier = defaultMultiplier * globalRate * armorMultiplier;
         uint32 newBaseArmor= round(creatureABInfo->ArmorMultiplier * (useDefStats || !LevelScaling || skipLevel ? origCreatureStats->GenerateArmor(creatureTemplate) : creatureStats->GenerateArmor(creatureTemplate)));
 
         if (!sABScriptMgr->OnBeforeUpdateStats(creature, scaledHealth, scaledMana, damageMul, newBaseArmor))
             return;
 
-        uint32 prevMaxHealth = creature->GetMaxHealth();
-        uint32 prevMaxPower = creature->GetMaxPower(POWER_MANA);
-        uint32 prevHealth = creature->GetHealth();
-        uint32 prevPower = creature->GetPower(POWER_MANA);
-
-        Powers pType= creature->getPowerType();
-
-        creature->SetArmor(newBaseArmor);
-        creature->SetModifierValue(UNIT_MOD_ARMOR, BASE_VALUE, (float)newBaseArmor);
-        creature->SetCreateHealth(scaledHealth);
-        creature->SetMaxHealth(scaledHealth);
-        creature->ResetPlayerDamageReq();
-        creature->SetCreateMana(scaledMana);
-        creature->SetMaxPower(POWER_MANA, scaledMana);
-        creature->SetModifierValue(UNIT_MOD_ENERGY, BASE_VALUE, (float)100.0f);
-        creature->SetModifierValue(UNIT_MOD_RAGE, BASE_VALUE, (float)100.0f);
-        creature->SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, (float)scaledHealth);
-        creature->SetModifierValue(UNIT_MOD_MANA, BASE_VALUE, (float)scaledMana);
         creatureABInfo->DamageMultiplier = damageMul;
 
-        uint32 scaledCurHealth=prevHealth && prevMaxHealth ? float(scaledHealth)/float(prevMaxHealth)*float(prevHealth) : 0;
-        uint32 scaledCurPower=prevPower && prevMaxPower  ? float(scaledMana)/float(prevMaxPower)*float(prevPower) : 0;
+        if (!PlayerScaling){
+            uint32 prevMaxHealth = creature->GetMaxHealth();
+            uint32 prevMaxPower = creature->GetMaxPower(POWER_MANA);
+            uint32 prevHealth = creature->GetHealth();
+            uint32 prevPower = creature->GetPower(POWER_MANA);
 
-        creature->SetHealth(scaledCurHealth);
-        if (pType == POWER_MANA)
-            creature->SetPower(POWER_MANA, scaledCurPower);
-        else
-            creature->setPowerType(pType); // fix creatures with different power types
+            Powers pType= creature->getPowerType();
 
-        creature->UpdateAllStats();
+            creature->SetArmor(newBaseArmor);
+            creature->SetModifierValue(UNIT_MOD_ARMOR, BASE_VALUE, (float)newBaseArmor);
+            creature->SetCreateHealth(scaledHealth);
+            creature->SetMaxHealth(scaledHealth);
+            creature->ResetPlayerDamageReq();
+            creature->SetCreateMana(scaledMana);
+            creature->SetMaxPower(POWER_MANA, scaledMana);
+            creature->SetModifierValue(UNIT_MOD_ENERGY, BASE_VALUE, (float)100.0f);
+            creature->SetModifierValue(UNIT_MOD_RAGE, BASE_VALUE, (float)100.0f);
+            creature->SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, (float)scaledHealth);
+            creature->SetModifierValue(UNIT_MOD_MANA, BASE_VALUE, (float)scaledMana);
+
+            uint32 scaledCurHealth=prevHealth && prevMaxHealth ? float(scaledHealth)/float(prevMaxHealth)*float(prevHealth) : 0;
+            uint32 scaledCurPower=prevPower && prevMaxPower  ? float(scaledMana)/float(prevMaxPower)*float(prevPower) : 0;
+
+            creature->SetHealth(scaledCurHealth);
+            if (pType == POWER_MANA)
+                creature->SetPower(POWER_MANA, scaledCurPower);
+            else
+                creature->setPowerType(pType); // fix creatures with different power types
+
+            creature->UpdateAllStats();
+        }
     }
 
 private:
