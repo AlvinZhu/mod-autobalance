@@ -471,14 +471,14 @@ class AutoBalance_UnitScript : public UnitScript
         return _Modifer_DealDamage(playerVictim, AttackerUnit, damage);
     }
 
-    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* spellInfo) override
+    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* /*spellInfo*/) override
     {
-        damage = _Modifer_DealDamage(target, attacker, damage, spellInfo);
+        damage = _Modifer_DealDamage(target, attacker, damage);
     }
 
-    void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* spellInfo) override
+    void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* /*spellInfo*/) override
     {
-        damage = _Modifer_DealDamage(target, attacker, damage, spellInfo);
+        damage = _Modifer_DealDamage(target, attacker, damage);
     }
 
     void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage) override
@@ -486,8 +486,8 @@ class AutoBalance_UnitScript : public UnitScript
         damage = _Modifer_DealDamage(target, attacker, damage);
     }
 
-    void ModifyHealReceived(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* spellInfo) override {
-        damage = _Modifer_DealDamage(target, attacker, damage, spellInfo);
+    void ModifyHealReceived(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* /*spellInfo*/) override {
+        damage = _Modifer_DealDamage(target, attacker, damage);
     }
 
     bool _isPlayerORPet(Unit* unit)
@@ -496,11 +496,8 @@ class AutoBalance_UnitScript : public UnitScript
     }
 
 
-    uint32 _Modifer_DealDamage(Unit* target, Unit* attacker, uint32 damage, SpellInfo const* spellInfo = nullptr)
+    uint32 _Modifer_DealDamage(Unit* target, Unit* attacker, uint32 damage)
     {
-//        if (spellInfo && spellInfo->Id == 40265) {
-//            damage = damage * 0.1;
-//        }
         if (DamageScalingOnly){
             if (!enabled || !attacker || !attacker->IsInWorld())
                 return damage;
@@ -706,7 +703,7 @@ class AutoBalance_AllMapScript : public AllMapScript
                 else
                 {
                     //mapABInfo->playerCount--;
-                    mapABInfo->playerCount = GetMapNonGMPlayersCountWithBots(map); - 1;
+                    mapABInfo->playerCount = GetMapNonGMPlayersCountWithBots(map);
                 }
             }
 
@@ -818,7 +815,7 @@ public:
         if (!creature->IsAlive())
             return;
 
-        int32 curCount=mapABInfo->playerCount + PlayerCountDifficultyOffset;
+        uint32 curCount=mapABInfo->playerCount + PlayerCountDifficultyOffset;
         if (perDungeonScalingEnabled())
         {
             curCount = adjustCurCount(curCount, mapId);
