@@ -466,28 +466,28 @@ class AutoBalance_UnitScript : public UnitScript
     {
     }
 
-    uint32 DealDamage(Unit* AttackerUnit, Unit *playerVictim, uint32 damage, DamageEffectType /*damagetype*/) override
+    uint32 DealDamage(Unit* AttackerUnit, Unit *playerVictim, uint32 damage, DamageEffectType damagetype) override
     {
-        return _Modifer_DealDamage(playerVictim, AttackerUnit, damage);
+        return _Modifer_DealDamage(playerVictim, AttackerUnit, damage, damagetype);
     }
 
     void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* /*spellInfo*/) override
     {
-        damage = _Modifer_DealDamage(target, attacker, damage);
+        damage = _Modifer_DealDamage(target, attacker, damage, DOT);
     }
 
     void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* /*spellInfo*/) override
     {
-        damage = _Modifer_DealDamage(target, attacker, damage);
+        damage = _Modifer_DealDamage(target, attacker, damage, SPELL_DIRECT_DAMAGE);
     }
 
     void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage) override
     {
-        damage = _Modifer_DealDamage(target, attacker, damage);
+        damage = _Modifer_DealDamage(target, attacker, damage, DIRECT_DAMAGE);
     }
 
-    void ModifyHealReceived(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* /*spellInfo*/) override {
-        damage = _Modifer_DealDamage(target, attacker, damage);
+    void ModifyHealReceived(Unit* target, Unit* healer, uint32& damage, SpellInfo const* /*spellInfo*/) override {
+        damage = _Modifer_DealDamage(target, healer, damage, HEAL);
     }
 
     bool _isPlayerORPet(Unit* unit)
@@ -496,7 +496,7 @@ class AutoBalance_UnitScript : public UnitScript
     }
 
 
-    uint32 _Modifer_DealDamage(Unit* target, Unit* attacker, uint32 damage)
+    uint32 _Modifer_DealDamage(Unit* target, Unit* attacker, uint32 damage, DamageEffectType damagetype = DIRECT_DAMAGE)
     {
         if (DamageScalingOnly){
             if (!enabled || !attacker || !attacker->IsInWorld())
@@ -509,22 +509,25 @@ class AutoBalance_UnitScript : public UnitScript
             float attackerMultiplier = attacker->CustomData.GetDefault<AutoBalanceCreatureInfo>("AutoBalanceCreatureInfo")->DamageMultiplier;
             float targetMultiplier = target->CustomData.GetDefault<AutoBalanceCreatureInfo>("AutoBalanceCreatureInfo")->DamageMultiplier;
 
+            if ((fabs(attackerMultiplier - 1.0) < 0.01) && fabs(targetMultiplier - 1.0) < 0.01)
+                return damage;
+
             if (attackerMultiplier < 0.01)
                 attackerMultiplier = 0.01;
 
             if (targetMultiplier < 0.01)
                 targetMultiplier = 0.01;
 
-            if ((fabs(attackerMultiplier - 1.0) < 0.01) && fabs(targetMultiplier - 1.0) < 0.01)
-                return damage;
-
             if (_isPlayerORPet(attacker))
             {
-                return _isPlayerORPet(target) ? damage : damage / targetMultiplier;
+                return _isPlayerORPet(target) ? damage : uint32((float)damage / targetMultiplier);
             }
             else
             {
-                return _isPlayerORPet(target) ? damage * attackerMultiplier : damage;
+                if (damagetype == HEAL)
+                    return damage;
+                else
+                    return _isPlayerORPet(target) ? uint32((float)damage * attackerMultiplier) : damage;
             }
         }
 
