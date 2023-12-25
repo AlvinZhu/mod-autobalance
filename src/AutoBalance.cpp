@@ -232,7 +232,7 @@ static bool Announcement;
 static bool LevelScalingEndGameBoost, PlayerChangeNotify, rewardEnabled;
 static float MinHPModifier, MinManaModifier, MinDamageModifier, MinCCDurationModifier, MaxCCDurationModifier;
 //npcbot
-static bool CountNpcBots;
+static bool CountNpcBots, DamageScalingOnly;
 //end npcbot
 
 // RewardScaling.*
@@ -726,7 +726,7 @@ void AddCreatureToMapData(Creature* creature, bool addToCreatureList = true, Pla
     }
 
     // if this is a creature controlled by the player, skip
-    if (((creature->IsHunterPet() || creature->IsPet() || creature->IsSummon()) && creature->IsControlledByPlayer()))
+    if (creature->GetOwner() && creature->GetOwner()->GetTypeId() == TYPEID_PLAYER)
     {
         LOG_DEBUG("module.AutoBalance", "AutoBalance_AllCreature::AddCreatureToMapData(): {} ({}) is controlled by the player - skip.", creature->GetName(), creatureABInfo->UnmodifiedLevel);
         return;
@@ -1158,6 +1158,10 @@ class AutoBalance_WorldScript : public WorldScript
         CountNpcBots = sConfigMgr->GetOption<bool>("AutoBalance.CountNpcBots", true);
         EnableWorld = sConfigMgr->GetOption<bool>("AutoBalance.Enable.World", false);
         //end npcbot
+
+        //alvin mod
+        DamageScalingOnly = sConfigMgr->GetOption<bool>("AutoBalance.DamageScalingOnly", true);
+        //end alvin mod
 
         rewardEnabled = sConfigMgr->GetOption<bool>("AutoBalance.reward.enable", 1);
         PlayerCountDifficultyOffset = sConfigMgr->GetOption<int32>("AutoBalance.playerCountDifficultyOffset", 0);
@@ -1601,29 +1605,29 @@ class AutoBalance_UnitScript : public UnitScript
     {
     }
 
-    uint32 DealDamage(Unit* AttackerUnit, Unit *playerVictim, uint32 damage, DamageEffectType /*damagetype*/) override
+    uint32 DealDamage(Unit* AttackerUnit, Unit *playerVictim, uint32 damage, DamageEffectType damagetype) override
     {
-        return _Modifer_DealDamage(playerVictim, AttackerUnit, damage);
+        return _Modifer_DealDamage(playerVictim, AttackerUnit, damage, damagetype);
     }
 
     void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* /*spellInfo*/) override
     {
-        damage = _Modifer_DealDamage(target, attacker, damage);
+        damage = _Modifer_DealDamage(target, attacker, damage, DOT);
     }
 
     void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* /*spellInfo*/) override
     {
-        damage = _Modifer_DealDamage(target, attacker, damage);
+        damage = _Modifer_DealDamage(target, attacker, damage, SPELL_DIRECT_DAMAGE);
     }
 
     void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage) override
     {
-        damage = _Modifer_DealDamage(target, attacker, damage);
+        damage = _Modifer_DealDamage(target, attacker, damage, DIRECT_DAMAGE);
     }
 
-    void ModifyHealReceived(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* /*spellInfo*/) override
+    void ModifyHealReceived(Unit* target, Unit* healer, uint32& damage, SpellInfo const* /*spellInfo*/) override
     {
-        damage = _Modifer_DealDamage(target, attacker, damage);
+        damage = _Modifer_DealDamage(target, healer, damage, HEAL);
     }
 
     void OnAuraApply(Unit* unit, Aura* aura) override {
@@ -1641,24 +1645,20 @@ class AutoBalance_UnitScript : public UnitScript
         }
     }
 
-    uint32 _Modifer_DealDamage(Unit* target, Unit* attacker, uint32 damage) const
+    bool _isPlayerORPet(Unit* unit) const
+    {
+        return unit->IsNPCBotOrPet() || unit->GetTypeId() == TYPEID_PLAYER || (unit->GetOwner() && unit->GetOwner()->GetTypeId() == TYPEID_PLAYER);
+    }
+
+    uint32 _Modifer_DealDamage(Unit* target, Unit* attacker, uint32 damage, DamageEffectType damagetype = DIRECT_DAMAGE) const
     {
         // check that we're enabled globally, else return the original damage
         if (!EnableGlobal)
             return damage;
 
-        // make sure we have an attacker, that its not a player, and that the attacker is in the world, else return the original damage
-        if (!attacker || attacker->GetTypeId() == TYPEID_PLAYER || !attacker->FindMap())
+        // make sure we have an attacker, that the attacker is in the world, else return the original damage
+        if (!attacker || !attacker->FindMap())
             return damage;
-
-        // if the attacker is under the control of the player, return the original damage
-        if ((attacker->IsHunterPet() || attacker->IsPet() || attacker->IsSummon()) && attacker->IsControlledByPlayer())
-            return damage;
-
-        //npcbot
-        if (attacker->IsNPCBotOrPet())
-            return damage;
-        //end npcbot
 
         // make sure we're in an instance, else return the original damage
         if (!ShouldMapBeEnabled(target->GetMap()) || !ShouldMapBeEnabled(attacker->GetMap()))
@@ -1671,6 +1671,52 @@ class AutoBalance_UnitScript : public UnitScript
         // if either the target or the attacker's maps are not enabled, return the original damage
         if (!targetMapInfo->enabled || !attackerMapInfo->enabled)
             return damage;
+
+        if (DamageScalingOnly){
+            float attackerMultiplier = attacker->CustomData.GetDefault<AutoBalanceCreatureInfo>("AutoBalanceCreatureInfo")->DamageMultiplier;
+            float targetMultiplier = target->CustomData.GetDefault<AutoBalanceCreatureInfo>("AutoBalanceCreatureInfo")->DamageMultiplier;
+
+            if ((fabs(attackerMultiplier - 1.0) < 0.01) && fabs(targetMultiplier - 1.0) < 0.01)
+                return damage;
+
+            if (attackerMultiplier < 0.01)
+                attackerMultiplier = 0.01;
+
+            if (targetMultiplier < 0.01)
+                targetMultiplier = 0.01;
+
+            if (_isPlayerORPet(attacker))
+            {
+                if (_isPlayerORPet(target)) {
+                    return damage;
+                } else {
+                    return uint32((float) damage / targetMultiplier);
+                }
+            }
+            else
+            {
+                if (damagetype == HEAL)
+                    return damage;
+                else if (_isPlayerORPet(target)) {
+                    return uint32((float) damage * attackerMultiplier);
+                } else {
+                    return damage;
+                }
+            }
+        }
+
+        // make sure attacker, that its not a player
+        if (attacker->GetTypeId() == TYPEID_PLAYER)
+            return damage;
+
+        // if the attacker is under the control of the player, return the original damage
+        if (attacker->GetOwner() && attacker->GetOwner()->GetTypeId() == TYPEID_PLAYER)
+            return damage;
+
+        //npcbot
+        if (attacker->IsNPCBotOrPet())
+            return damage;
+        //end npcbot
 
         // get the current creature's damage multiplier
         float damageMultiplier = attacker->CustomData.GetDefault<AutoBalanceCreatureInfo>("AutoBalanceCreatureInfo")->DamageMultiplier;
@@ -1721,7 +1767,7 @@ class AutoBalance_UnitScript : public UnitScript
             return originalDuration;
 
         // if the aura was cast by a pet or summon, return the original duration
-        if ((caster->IsHunterPet() || caster->IsPet() || caster->IsSummon()) && caster->IsControlledByPlayer())
+        if (caster->GetOwner() && caster->GetOwner()->GetTypeId() == TYPEID_PLAYER)
             return originalDuration;
 
         // only if this aura is a CC
@@ -1784,7 +1830,7 @@ class AutoBalance_AllMapScript : public AllMapScript
         if (mapABInfo->enabled && PlayerChangeNotify && EnableGlobal && old_player_count != mapABInfo->playerCount) {
             for (MapReference const& ref : map->GetPlayers()) {
                 if (Player const* playerHandle = ref.GetSource()) {
-                    ChatHandler(playerHandle->GetSession()).PSendSysMessage("|cffFF0000 [AutoBalance+NPCBots]|r|cffFF8000 %s's bots entered %s. Auto setting player count to %i (Player Difficulty Offset = %i) |r", player->GetName().c_str(), map->GetMapName(), mapABInfo->playerCount + PlayerCountDifficultyOffset, PlayerCountDifficultyOffset);
+                    ChatHandler(playerHandle->GetSession()).PSendSysMessage("|cffFF0000 [AutoBalance+NPCBots]|r|cffFF8000 %s 的NPCBots进入了 %s。自动将玩家数量设置为 %i（玩家难度偏移 = %i） |r", player->GetName().c_str(), map->GetMapName(), mapABInfo->playerCount + PlayerCountDifficultyOffset, PlayerCountDifficultyOffset);
                 }
             }
         }
@@ -1859,11 +1905,11 @@ class AutoBalance_AllMapScript : public AllMapScript
                 if (Player* playerHandle = playerIteration->GetSource())
                 {
                     ChatHandler chatHandle = ChatHandler(playerHandle->GetSession());
-                    chatHandle.PSendSysMessage("|cffFF0000 [AutoBalance]|r|cffFF8000 %s enters %s (%u-player %s). Player count set to %u (Player Difficulty Offset = %u) |r",
+                    chatHandle.PSendSysMessage("|cffFF0000 [AutoBalance]|r|cffFF8000 %s 进入了 %s (%u-人 %s)。玩家数量设置为 %u (玩家难度偏移 = %u) |r",
                         player->GetName().c_str(),
                         map->GetMapName(),
                         GetMapMaxPlayers(map),
-                            map->IsHeroic() ? "Heroic" : "Normal",
+                            map->IsHeroic() ? "英雄" : "普通",
                         mapABInfo->playerCount + PlayerCountDifficultyOffset,
                         PlayerCountDifficultyOffset
                     );
@@ -1914,7 +1960,7 @@ class AutoBalance_AllMapScript : public AllMapScript
 
                         // notify the player that they left the instance while combat was in progress
                         ChatHandler chatHandle = ChatHandler(player->GetSession());
-                        chatHandle.PSendSysMessage("|cffFF0000 [AutoBalance]|r|cffFF8000 You left the instance while combat was in progress. The instance player count is still %u.", mapABInfo->playerCount);
+                        chatHandle.PSendSysMessage("|cffFF0000 [AutoBalance]|r|cffFF8000 你在战斗进行时离开了副本。副本玩家数量仍为 %u.", mapABInfo->playerCount);
 
                         break;
                     }
@@ -1930,7 +1976,7 @@ class AutoBalance_AllMapScript : public AllMapScript
                         if (mapPlayer != player)
                         {
                             ChatHandler chatHandle = ChatHandler(mapPlayer->GetSession());
-                            chatHandle.PSendSysMessage("|cffFF0000 [AutoBalance]|r|cffFF8000 %s left the instance while combat was in progress. The instance player count is still %u.", player->GetName().c_str(), mapABInfo->playerCount);
+                            chatHandle.PSendSysMessage("|cffFF0000 [AutoBalance]|r|cffFF8000 %s 在战斗进行时离开了副本。副本玩家数量仍为 %u.", player->GetName().c_str(), mapABInfo->playerCount);
                         }
                     }
                 }
@@ -1950,7 +1996,7 @@ class AutoBalance_AllMapScript : public AllMapScript
                 if (mapPlayer && mapPlayer != player)
                 {
                     ChatHandler chatHandle = ChatHandler(mapPlayer->GetSession());
-                    chatHandle.PSendSysMessage("|cffFF0000 [AutoBalance]|r|cffFF8000 %s left %s. Auto setting player count to %i (Player Difficulty Offset = %i) |r", player->GetName().c_str(), map->GetMapName(), mapABInfo->playerCount + PlayerCountDifficultyOffset, PlayerCountDifficultyOffset);
+                    chatHandle.PSendSysMessage("|cffFF0000 [AutoBalance]|r|cffFF8000 %s 离开了 %s。自动将玩家数量设置为 %i (玩家难度偏移 = %i) |r", player->GetName().c_str(), map->GetMapName(), mapABInfo->playerCount + PlayerCountDifficultyOffset, PlayerCountDifficultyOffset);
                 }
             }
         }
@@ -2018,7 +2064,7 @@ public:
             return false;
 
         // if this is a pet or summon controlled by the player, make no changes
-        if ((creature->IsHunterPet() || creature->IsPet() || creature->IsSummon()) && creature->IsControlledByPlayer())
+        if (creature->GetOwner() && creature->GetOwner()->GetTypeId() == TYPEID_PLAYER)
             return false;
 
         // if this is a non-relevant creature, skip
@@ -2137,7 +2183,7 @@ public:
             return;
 
         // if this is a pet or summon controlled by the player, make no changes
-        if (((creature->IsHunterPet() || creature->IsPet() || creature->IsSummon()) && creature->IsControlledByPlayer()))
+        if (creature->GetOwner() && creature->GetOwner()->GetTypeId() == TYPEID_PLAYER)
             return;
 
         // if this is a non-relevant creature, make no changes
@@ -2252,7 +2298,8 @@ public:
             }
 
             creatureABInfo->selectedLevel = selectedLevel;
-            creature->SetLevel(creatureABInfo->selectedLevel);
+            if (!DamageScalingOnly)
+                creature->SetLevel(creatureABInfo->selectedLevel);
         }
         else
         {
@@ -2854,12 +2901,6 @@ public:
         //
         float damageMul = defaultMultiplier * statMod_global * statMod_damage;
 
-        // Can not be less than MinDamageModifier
-        if (damageMul <= MinDamageModifier)
-        {
-            damageMul = MinDamageModifier;
-        }
-
         // Calculate the new base damage
         float origDmgBase = origCreatureStats->GenerateBaseDamage(creatureTemplate);
         float newDmgBase = 0;
@@ -2915,6 +2956,12 @@ public:
             damageMul *= newDmgBase/origDmgBase;
         }
 
+        // Can not be less than MinDamageModifier
+        if (damageMul <= MinDamageModifier)
+        {
+            damageMul = MinDamageModifier;
+        }
+
         //
         // Crowd Control Debuff Duration Scaling
         //
@@ -2944,6 +2991,11 @@ public:
         if (!sABScriptMgr->OnBeforeUpdateStats(creature, scaledHealth, scaledMana, damageMul, newBaseArmor))
             return;
 
+        creatureABInfo->DamageMultiplier = damageMul;
+
+        if (DamageScalingOnly)
+            return;
+
         uint32 prevMaxHealth = creature->GetMaxHealth();
         uint32 prevMaxPower = creature->GetMaxPower(POWER_MANA);
         uint32 prevHealth = creature->GetHealth();
@@ -2965,7 +3017,6 @@ public:
         creature->SetModifierValue(UNIT_MOD_RAGE, BASE_VALUE, (float)100.0f);
         creature->SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, (float)scaledHealth);
         creature->SetModifierValue(UNIT_MOD_MANA, BASE_VALUE, (float)scaledMana);
-        creatureABInfo->DamageMultiplier = damageMul;
         creatureABInfo->CCDurationMultiplier = ccDurationMul;
 
         uint32 scaledCurHealth=prevHealth && prevMaxHealth ? float(scaledHealth)/float(prevMaxHealth)*float(prevHealth) : 0;
@@ -3067,7 +3118,7 @@ public:
         if (!*args)
         {
             handler->PSendSysMessage(".autobalance setoffset #");
-            handler->PSendSysMessage("Sets the Player Difficulty Offset for instances. Example: (You + offset(1) = 2 player difficulty).");
+            handler->PSendSysMessage("为副本设置玩家难度偏移。示例：（你(1) + offset(1) = 2 玩家难度）。");
             return false;
         }
         char* offset = strtok((char*)args, " ");
@@ -3076,19 +3127,19 @@ public:
         if (offset)
         {
             offseti = (int32)atoi(offset);
-            handler->PSendSysMessage("Changing Player Difficulty Offset to %i.", offseti);
+            handler->PSendSysMessage("将玩家难度偏移更改为 %i。", offseti);
             PlayerCountDifficultyOffset = offseti;
             lastConfigTime = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
             return true;
         }
         else
-            handler->PSendSysMessage("Error changing Player Difficulty Offset! Please try again.");
+            handler->PSendSysMessage("更改玩家难度偏移时出错！请再试一遍。");
         return false;
     }
 
     static bool HandleABGetOffsetCommand(ChatHandler* handler, const char* /*args*/)
     {
-        handler->PSendSysMessage("Current Player Difficulty Offset = %i", PlayerCountDifficultyOffset);
+        handler->PSendSysMessage("当前玩家难度偏移 = %i", PlayerCountDifficultyOffset);
         return true;
     }
 
@@ -3136,23 +3187,23 @@ public:
         if (ShouldMapBeEnabled(player->GetMap()))
         {
             handler->PSendSysMessage("---");
-            handler->PSendSysMessage("Map: %s (ID: %u)", player->GetMap()->GetMapName(), player->GetMapId());
-            handler->PSendSysMessage("Players on map: %u (Lvl %u - %u)",
+            handler->PSendSysMessage("地图: %s (ID: %u)", player->GetMap()->GetMapName(), player->GetMapId());
+            handler->PSendSysMessage("地图中的玩家数量: %u (等级 %u - %u)",
                                     mapABInfo->playerCount,
                                     mapABInfo->lowestPlayerLevel,
                                     mapABInfo->highestPlayerLevel
                                     );
-            handler->PSendSysMessage("Map Level: %u%s", (uint8)(mapABInfo->avgCreatureLevel+0.5f),
-                                                        mapABInfo->isLevelScalingEnabled ? std::string("->") + std::to_string(mapABInfo->highestPlayerLevel) + std::string(" (Level Scaling Enabled)") : std::string(" (Level Scaling Disabled)")
+            handler->PSendSysMessage("地图等级: %u%s", (uint8)(mapABInfo->avgCreatureLevel+0.5f),
+                                                        mapABInfo->isLevelScalingEnabled ? std::string("->") + std::to_string(mapABInfo->highestPlayerLevel) + std::string(" (等级缩放已启用)") : std::string(" (等级缩放已禁用)")
                                     );
-            handler->PSendSysMessage("LFG Range: Lvl %u - %u (Target: Lvl %u)", mapABInfo->lfgMinLevel, mapABInfo->lfgMaxLevel, mapABInfo->lfgTargetLevel);
-            handler->PSendSysMessage("Active Creatures in map: %u (Lvl %u - %u | Avg Lvl %.2f)",
+            handler->PSendSysMessage("寻求组队范围: 等级 %u - %u (目标: 等级 %u)", mapABInfo->lfgMinLevel, mapABInfo->lfgMaxLevel, mapABInfo->lfgTargetLevel);
+            handler->PSendSysMessage("地图中的活跃生物数量: %u (等级 %u - %u | 平均等级 %.2f)",
                                     mapABInfo->activeCreatureCount,
                                     mapABInfo->lowestCreatureLevel,
                                     mapABInfo->highestCreatureLevel,
                                     mapABInfo->avgCreatureLevel
                                     );
-            handler->PSendSysMessage("Total Creatures in map: %u",
+            handler->PSendSysMessage("地图中的生物数量: %u",
                                     mapABInfo->allMapCreatures.size()
                                     );
 
@@ -3160,7 +3211,7 @@ public:
         }
         else
         {
-            handler->PSendSysMessage("The target is not in a dungeon or battleground.");
+            handler->PSendSysMessage("目标不在副本或战场中。");
             return true;
         }
     }
@@ -3185,13 +3236,13 @@ public:
                                   creatureABInfo->UnmodifiedLevel,
                                   mapABInfo->isLevelScalingEnabled ? std::string("->") + std::to_string(creatureABInfo->selectedLevel) : "",
                                   target->IsDungeonBoss() ? " | Boss" : "",
-                                  creatureABInfo->isActive ? "Active for Map Stats" : "Ignored for Map Stats");
-        handler->PSendSysMessage("Health multiplier: %.3f", creatureABInfo->HealthMultiplier);
-        handler->PSendSysMessage("Mana multiplier: %.3f", creatureABInfo->ManaMultiplier);
-        handler->PSendSysMessage("Armor multiplier: %.3f", creatureABInfo->ArmorMultiplier);
-        handler->PSendSysMessage("Damage multiplier: %.3f", creatureABInfo->DamageMultiplier);
-        handler->PSendSysMessage("CC Duration multiplier: %.3f", creatureABInfo->CCDurationMultiplier);
-        handler->PSendSysMessage("XP multiplier: %.3f  Money multiplier: %.3f", creatureABInfo->XPModifier, creatureABInfo->MoneyModifier);
+                                  creatureABInfo->isActive ? "活跃" : "忽略");
+        handler->PSendSysMessage("生命值倍率: %.3f", creatureABInfo->HealthMultiplier);
+        handler->PSendSysMessage("法力值倍率: %.3f", creatureABInfo->ManaMultiplier);
+        handler->PSendSysMessage("护甲倍率: %.3f", creatureABInfo->ArmorMultiplier);
+        handler->PSendSysMessage("伤害倍率: %.3f", creatureABInfo->DamageMultiplier);
+        handler->PSendSysMessage("群体控制持续时间倍率: %.3f", creatureABInfo->CCDurationMultiplier);
+        handler->PSendSysMessage("经验值倍率: %.3f  金币倍率: %.3f", creatureABInfo->XPModifier, creatureABInfo->MoneyModifier);
         return true;
     }
 };
